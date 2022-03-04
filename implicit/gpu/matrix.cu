@@ -3,6 +3,7 @@
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/transform.h>
 
+#include "implicit/gpu/convert.cuh"
 #include "implicit/gpu/dot.cuh"
 #include "implicit/gpu/matrix.h"
 #include "implicit/gpu/utils.h"
@@ -136,15 +137,16 @@ void Matrix<T>::assign_rows(const Vector<int> &rowids, const Matrix<T> &other) {
 template <typename T>
 __global__ void calculate_norms_kernel(const T *input, int rows, int cols,
                                        T *output) {
-  static __shared__ T shared[32];
+  static __shared__ float shared[32];
   for (int i = blockIdx.x; i < rows; i += gridDim.x) {
-    T value = input[i * cols + threadIdx.x];
-    T squared_norm = dot(value, value, shared);
+    float value = convert<T, float>(input[i * cols + threadIdx.x]);
+    float squared_norm = dot(value, value, shared);
     if (threadIdx.x == 0) {
-      output[i] = sqrt(squared_norm);
-      if (output[i] == 0) {
-        output[i] = 1e-10;
+      float norm = sqrt(squared_norm);
+      if (norm == 0) {
+        norm = 1e-10;
       }
+      output[i] = convert<float, T>(norm);
     }
   }
 }
@@ -176,6 +178,7 @@ void Matrix<T>::to_host(T *out) const {
 }
 
 template struct Matrix<float>;
+template struct Matrix<half>;
 
 CSRMatrix::CSRMatrix(int rows, int cols, int nonzeros, const int *indptr_,
                      const int *indices_, const float *data_)
