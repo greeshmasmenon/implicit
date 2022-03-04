@@ -16,14 +16,14 @@ public:
   ~KnnQuery();
   cublasContext *blas_handle;
 
-  void topk(const Matrix &items, const Matrix &query, int k, int *indices,
+  void topk(const Matrix<float> &items, const Matrix<float> &query, int k, int *indices,
             float *distances, float *item_norms = NULL,
             const COOMatrix *query_filter = NULL,
             Vector<int> *item_filter = NULL);
 
-  void argpartition(const Matrix &items, int k, int *indices, float *distances,
+  void argpartition(const Matrix<float> &items, int k, int *indices, float *distances,
                     bool allow_tiling);
-  void argsort(const Matrix &items, int *indices, float *distances);
+  void argsort(const Matrix<float> &items, int *indices, float *distances);
 
 protected:
   std::unique_ptr<rmm::mr::device_memory_resource> mr;

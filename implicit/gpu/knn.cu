@@ -87,7 +87,7 @@ KnnQuery::KnnQuery(size_t temp_memory) {
   CHECK_CUBLAS(cublasCreate(&blas_handle));
 }
 
-void KnnQuery::topk(const Matrix &items, const Matrix &query, int k,
+void KnnQuery::topk(const Matrix<float> &items, const Matrix<float> &query, int k,
                     int *indices, float *distances, float *item_norms,
                     const COOMatrix *query_filter, Vector<int> *item_filter) {
   if (query.cols != items.cols) {
@@ -158,7 +158,7 @@ void KnnQuery::topk(const Matrix &items, const Matrix &query, int k,
 
   rmm::device_uvector<float> temp_mem(batch_size * temp_distances_cols, stream,
                                       mr.get());
-  Matrix temp_distances(batch_size, temp_distances_cols, temp_mem.data(),
+  Matrix<float> temp_distances(batch_size, temp_distances_cols, temp_mem.data(),
                         false);
 
   // Fill temp_distances if we're padding so that results don't appear
@@ -172,7 +172,7 @@ void KnnQuery::topk(const Matrix &items, const Matrix &query, int k,
   for (int start = 0; start < query.rows; start += batch_size) {
     auto end = std::min(query.rows, start + static_cast<int>(batch_size));
 
-    Matrix batch(query, start, end);
+    Matrix<float> batch(query, start, end);
     temp_distances.rows = batch.rows;
 
     // matrix multiple the items by the batch, store in distances
@@ -247,7 +247,7 @@ void KnnQuery::topk(const Matrix &items, const Matrix &query, int k,
   }
 }
 
-void KnnQuery::argpartition(const Matrix &items, int k, int *indices,
+void KnnQuery::argpartition(const Matrix<float> &items, int k, int *indices,
                             float *distances, bool allow_tiling) {
   k = std::min(k, items.cols);
 
@@ -325,7 +325,7 @@ void KnnQuery::argpartition(const Matrix &items, int k, int *indices,
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 
-void KnnQuery::argsort(const Matrix &items, int *indices, float *distances) {
+void KnnQuery::argsort(const Matrix<float> &items, int *indices, float *distances) {
   // We can't do this in place https://github.com/NVIDIA/cub/issues/238 ?
   // so generate temp memory for this
 

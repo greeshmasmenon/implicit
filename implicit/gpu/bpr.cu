@@ -71,7 +71,7 @@ __global__ void bpr_update_kernel(int samples, unsigned int *random_likes,
 
 std::pair<int, int> bpr_update(const Vector<int> &userids,
                                const Vector<int> &itemids,
-                               const Vector<int> &indptr, Matrix *X, Matrix *Y,
+                               const Vector<int> &indptr, Matrix<float> *X, Matrix<float> *Y,
                                float learning_rate, float reg, long seed,
                                bool verify_negative_samples) {
   if (X->cols != Y->cols)

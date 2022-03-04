@@ -112,7 +112,7 @@ LeastSquaresSolver::LeastSquaresSolver() {
   CHECK_CUBLAS(cublasCreate(&blas_handle));
 }
 
-void LeastSquaresSolver::calculate_yty(const Matrix &Y, Matrix *YtY,
+void LeastSquaresSolver::calculate_yty(const Matrix<float> &Y, Matrix<float> *YtY,
                                        float regularization) {
   if (YtY->cols != Y.cols)
     throw invalid_argument("YtY and Y should have the same number of columns");
@@ -132,8 +132,8 @@ void LeastSquaresSolver::calculate_yty(const Matrix &Y, Matrix *YtY,
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 
-void LeastSquaresSolver::least_squares(const CSRMatrix &Cui, Matrix *X,
-                                       const Matrix &YtY, const Matrix &Y,
+void LeastSquaresSolver::least_squares(const CSRMatrix &Cui, Matrix<float> *X,
+                                       const Matrix<float> &YtY, const Matrix<float> &Y,
                                        int cg_steps) const {
   int item_count = Y.rows, user_count = X->rows, factors = X->cols;
   if (X->cols != Y.cols)
@@ -217,12 +217,12 @@ __global__ void calculate_loss_kernel(int factors, int user_count,
   }
 }
 
-float LeastSquaresSolver::calculate_loss(const CSRMatrix &Cui, const Matrix &X,
-                                         const Matrix &Y,
+float LeastSquaresSolver::calculate_loss(const CSRMatrix &Cui, const Matrix<float> &X,
+                                         const Matrix<float> &Y,
                                          float regularization) {
   int item_count = Y.rows, factors = Y.cols, user_count = X.rows;
 
-  Matrix YtY(factors, factors, NULL);
+  Matrix<float> YtY(factors, factors, NULL);
   calculate_yty(Y, &YtY, regularization);
 
   float alpha = 1.0, beta = 0.;
@@ -231,7 +231,7 @@ float LeastSquaresSolver::calculate_loss(const CSRMatrix &Cui, const Matrix &X,
                            factors, &beta, YtY.data, factors));
   CHECK_CUDA(cudaDeviceSynchronize());
   float temp[2] = {0, 0};
-  Matrix output(2, 1, temp);
+  Matrix<float> output(2, 1, temp);
   calculate_loss_kernel<<<1024, factors, sizeof(float) * factors>>>(
       factors, user_count, item_count, X.data, Y.data, YtY.data, Cui.indptr,
       Cui.indices, Cui.data, regularization, output.data);

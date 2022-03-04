@@ -16,8 +16,8 @@ RandomState::RandomState(long seed) {
   CHECK_CURAND(curandSetPseudoRandomGeneratorSeed(rng, seed));
 }
 
-Matrix RandomState::uniform(int rows, int cols, float low, float high) {
-  Matrix ret(rows, cols, NULL);
+Matrix<float> RandomState::uniform(int rows, int cols, float low, float high) {
+  Matrix<float> ret(rows, cols, NULL);
   CHECK_CURAND(curandGenerateUniform(rng, ret.data, rows * cols));
 
   if ((low != 0.0) || (high != 1.0)) {
@@ -30,8 +30,8 @@ Matrix RandomState::uniform(int rows, int cols, float low, float high) {
   return ret;
 }
 
-Matrix RandomState::randn(int rows, int cols, float mean, float stddev) {
-  Matrix ret(rows, cols, NULL);
+Matrix<float> RandomState::randn(int rows, int cols, float mean, float stddev) {
+  Matrix<float> ret(rows, cols, NULL);
   CHECK_CURAND(curandGenerateNormal(rng, ret.data, rows * cols, mean, stddev));
   return ret;
 }

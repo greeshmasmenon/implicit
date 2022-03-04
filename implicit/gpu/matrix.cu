@@ -28,7 +28,8 @@ template struct Vector<char>;
 template struct Vector<int>;
 template struct Vector<float>;
 
-Matrix::Matrix(const Matrix &other, int rowid)
+template <typename T>
+Matrix<T>::Matrix(const Matrix<T> &other, int rowid)
     : rows(1), cols(other.cols), data(other.data + rowid * other.cols),
       storage(other.storage) {
   if (rowid >= other.rows) {
@@ -36,7 +37,8 @@ Matrix::Matrix(const Matrix &other, int rowid)
   }
 }
 
-Matrix::Matrix(const Matrix &other, int start_rowid, int end_rowid)
+template <typename T>
+Matrix<T>::Matrix(const Matrix<T> &other, int start_rowid, int end_rowid)
     : rows(end_rowid - start_rowid), cols(other.cols),
       data(other.data + start_rowid * other.cols), storage(other.storage) {
   if (end_rowid < start_rowid) {
@@ -47,8 +49,9 @@ Matrix::Matrix(const Matrix &other, int start_rowid, int end_rowid)
   }
 }
 
-void copy_rowids(const float *input, const int *rowids, int rows, int cols,
-                 float *output) {
+template <typename T>
+void copy_rowids(const T *input, const int *rowids, int rows, int cols,
+                 T *output) {
   // copy rows over
   auto count = thrust::make_counting_iterator<int>(0);
   thrust::for_each(count, count + (rows * cols), [=] __device__(int i) {
@@ -58,22 +61,24 @@ void copy_rowids(const float *input, const int *rowids, int rows, int cols,
   });
 }
 
-Matrix::Matrix(const Matrix &other, const Vector<int> &rowids)
+template <typename T>
+Matrix<T>::Matrix(const Matrix<T> &other, const Vector<int> &rowids)
     : rows(rowids.size), cols(other.cols) {
   storage.reset(
-      new rmm::device_uvector<float>(rows * cols, rmm::cuda_stream_view()));
+      new rmm::device_uvector<T>(rows * cols, rmm::cuda_stream_view()));
   data = storage->data();
   copy_rowids(other.data, rowids.data, rows, cols, data);
 }
 
-Matrix::Matrix(int rows, int cols, float *host_data, bool allocate)
+template <typename T>
+Matrix<T>::Matrix(int rows, int cols, T *host_data, bool allocate)
     : rows(rows), cols(cols) {
   if (allocate) {
     storage.reset(
-        new rmm::device_uvector<float>(rows * cols, rmm::cuda_stream_view()));
+        new rmm::device_uvector<T>(rows * cols, rmm::cuda_stream_view()));
     data = storage->data();
     if (host_data) {
-      CHECK_CUDA(cudaMemcpy(data, host_data, rows * cols * sizeof(float),
+      CHECK_CUDA(cudaMemcpy(data, host_data, rows * cols * sizeof(T),
                             cudaMemcpyHostToDevice));
     }
   } else {
@@ -81,7 +86,8 @@ Matrix::Matrix(int rows, int cols, float *host_data, bool allocate)
   }
 }
 
-void Matrix::resize(int rows, int cols) {
+template <typename T>
+void Matrix<T>::resize(int rows, int cols) {
   if (cols != this->cols) {
     throw std::logic_error(
         "changing number of columns in Matrix::resize is not implemented yet");
@@ -91,20 +97,21 @@ void Matrix::resize(int rows, int cols) {
         "reducing number of rows in Matrix::resize is not implemented yet");
   }
   auto new_storage =
-      new rmm::device_uvector<float>(rows * cols, rmm::cuda_stream_view());
+      new rmm::device_uvector<T>(rows * cols, rmm::cuda_stream_view());
   CHECK_CUDA(cudaMemcpy(new_storage->data(), data,
-                        this->rows * this->cols * sizeof(float),
+                        this->rows * this->cols * sizeof(T),
                         cudaMemcpyDeviceToDevice));
   int extra_rows = rows - this->rows;
   CHECK_CUDA(cudaMemset(new_storage->data() + this->rows * this->cols, 0,
-                        extra_rows * cols * sizeof(float)));
+                        extra_rows * cols * sizeof(T)));
   storage.reset(new_storage);
   data = storage->data();
   this->rows = rows;
   this->cols = cols;
 }
 
-void Matrix::assign_rows(const Vector<int> &rowids, const Matrix &other) {
+template <typename T>
+void Matrix<T>::assign_rows(const Vector<int> &rowids, const Matrix<T> &other) {
   if (other.cols != cols) {
     throw std::invalid_argument(
         "column dimensionality mismatch in Matrix::assign_rows");
@@ -114,8 +121,8 @@ void Matrix::assign_rows(const Vector<int> &rowids, const Matrix &other) {
   int other_cols = other.cols, other_rows = other.rows;
 
   int *rowids_data = rowids.data;
-  float *other_data = other.data;
-  float *self_data = data;
+  T *other_data = other.data;
+  T *self_data = data;
 
   thrust::for_each(count, count + (other_rows * other_cols),
                    [=] __device__(int i) {
@@ -126,12 +133,13 @@ void Matrix::assign_rows(const Vector<int> &rowids, const Matrix &other) {
                    });
 }
 
-__global__ void calculate_norms_kernel(const float *input, int rows, int cols,
-                                       float *output) {
-  static __shared__ float shared[32];
+template <typename T>
+__global__ void calculate_norms_kernel(const T *input, int rows, int cols,
+                                       T *output) {
+  static __shared__ T shared[32];
   for (int i = blockIdx.x; i < rows; i += gridDim.x) {
-    float value = input[i * cols + threadIdx.x];
-    float squared_norm = dot(value, value, shared);
+    T value = input[i * cols + threadIdx.x];
+    T squared_norm = dot(value, value, shared);
     if (threadIdx.x == 0) {
       output[i] = sqrt(squared_norm);
       if (output[i] == 0) {
@@ -141,7 +149,8 @@ __global__ void calculate_norms_kernel(const float *input, int rows, int cols,
   }
 }
 
-Matrix calculate_norms(const Matrix &input) {
+template <typename T>
+Matrix<T> Matrix<T>::calculate_norms() const {
   int devId;
   CHECK_CUDA(cudaGetDevice(&devId));
 
@@ -150,20 +159,23 @@ Matrix calculate_norms(const Matrix &input) {
                                     cudaDevAttrMultiProcessorCount, devId));
 
   int block_count = 256 * multiprocessor_count;
-  int thread_count = input.cols;
+  int thread_count = cols;
 
-  Matrix output(1, input.rows, NULL);
+  Matrix<T> output(1, rows, NULL);
   calculate_norms_kernel<<<block_count, thread_count>>>(
-      input.data, input.rows, input.cols, output.data);
+      data, rows, cols, output.data);
 
   CHECK_CUDA(cudaDeviceSynchronize());
   return output;
 }
 
-void Matrix::to_host(float *out) const {
-  CHECK_CUDA(cudaMemcpy(out, data, rows * cols * sizeof(float),
+template <typename T>
+void Matrix<T>::to_host(T *out) const {
+  CHECK_CUDA(cudaMemcpy(out, data, rows * cols * sizeof(T),
                         cudaMemcpyDeviceToHost));
 }
+
+template struct Matrix<float>;
 
 CSRMatrix::CSRMatrix(int rows, int cols, int nonzeros, const int *indptr_,
                      const int *indices_, const float *data_)

@@ -16,39 +16,43 @@ template <typename T> struct Vector {
   T *data;
 };
 
+template <typename T>
 struct Matrix {
   // Create a new matrix of shape (rows, cols) - copying from `data to the
   // device (if allocate=True and data != null). If allocate=false, this assumes
   // the data is preallocated on the gpu (cupy etc) and doesn't allocate any new
   // storage
-  Matrix(int rows, int cols, float *data = NULL, bool allocate = true);
+  Matrix(int rows, int cols, T *data = NULL, bool allocate = true);
 
   // Create a new Matrix by slicing a single row from an existing one. The
   // underlying storage buffer is shared in this case.
-  Matrix(const Matrix &other, int rowid);
+  Matrix(const Matrix<T> &other, int rowid);
 
   // Slice a contiguous series of rows from this Matrix. The underlying storge
   // buffer is shared here.
-  Matrix(const Matrix &other, int start_rowid, int end_rowid);
+  Matrix(const Matrix<T> &other, int start_rowid, int end_rowid);
 
   // select a bunch of rows from this matrix. this creates a copy
-  Matrix(const Matrix &other, const Vector<int> &rowids);
+  Matrix(const Matrix<T> &other, const Vector<int> &rowids);
 
   void resize(int rows, int cols);
-  void assign_rows(const Vector<int> &rowids, const Matrix &other);
+  void assign_rows(const Vector<int> &rowids, const Matrix<T> &other);
 
   Matrix() : rows(0), cols(0), data(NULL) {}
 
   // Copy the Matrix to host memory.
-  void to_host(float *output) const;
+  void to_host(T *output) const;
+
+  // Calculates norms for each row in the matrix
+  Matrix<T> calculate_norms() const;
+
 
   int rows, cols;
-  float *data;
+  T *data;
 
-  std::shared_ptr<rmm::device_uvector<float>> storage;
+  std::shared_ptr<rmm::device_uvector<T>> storage;
 };
 
-Matrix calculate_norms(const Matrix &input);
 
 struct CSRMatrix {
   CSRMatrix(int rows, int cols, int nonzeros, const int *indptr,

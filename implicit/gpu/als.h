@@ -12,12 +12,12 @@ struct LeastSquaresSolver {
   explicit LeastSquaresSolver();
   ~LeastSquaresSolver();
 
-  void least_squares(const CSRMatrix &Cui, Matrix *X, const Matrix &YtY,
-                     const Matrix &Y, int cg_steps) const;
+  void least_squares(const CSRMatrix &Cui, Matrix<float> *X, const Matrix<float> &YtY,
+                     const Matrix<float> &Y, int cg_steps) const;
 
-  void calculate_yty(const Matrix &Y, Matrix *YtY, float regularization);
+  void calculate_yty(const Matrix<float> &Y, Matrix<float> *YtY, float regularization);
 
-  float calculate_loss(const CSRMatrix &Cui, const Matrix &X, const Matrix &Y,
+  float calculate_loss(const CSRMatrix &Cui, const Matrix<float> &X, const Matrix<float> &Y,
                        float regularization);
 
   cublasContext *blas_handle;
