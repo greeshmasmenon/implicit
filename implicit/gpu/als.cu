@@ -1,10 +1,12 @@
 #include <math.h>
+#include <stdexcept>
 #include <stdio.h>
 
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 
 #include "implicit/gpu/als.h"
+#include "implicit/gpu/convert.cuh"
 #include "implicit/gpu/dot.cuh"
 #include "implicit/gpu/utils.h"
 
@@ -13,9 +15,10 @@ namespace gpu {
 
 using std::invalid_argument;
 
+template <typename T>
 __global__ void least_squares_cg_kernel(int factors, int user_count,
-                                        int item_count, float *X,
-                                        const float *Y, const float *YtY,
+                                        int item_count, T *X,
+                                        const T *Y, const T *YtY,
                                         const int *indptr, const int *indices,
                                         const float *data, int cg_steps) {
   extern __shared__ float shared_memory[];
@@ -29,8 +32,9 @@ __global__ void least_squares_cg_kernel(int factors, int user_count,
   // Stride over users in the grid:
   // https://devblogs.nvidia.com/parallelforall/cuda-pro-tip-write-flexible-kernels-grid-stride-loops/
   for (int u = blockIdx.x; u < user_count; u += gridDim.x) {
-    float *x = &X[u * factors];
-    float x_value = x[threadIdx.x];
+    T *x = &X[u * factors];
+
+    float x_value = convert<T, float>(x[threadIdx.x]);
 
     // handle 0-sized rows
     if (indptr[u] == indptr[u + 1]) {
@@ -41,10 +45,10 @@ __global__ void least_squares_cg_kernel(int factors, int user_count,
     // calculate residual r = YtCuPu - YtCuY Xu
     r = 0;
     for (int i = 0; i < factors; ++i) {
-      r -= x[i] * YtY[i * factors + threadIdx.x];
+      r -= convert<T, float>(x[i]) * convert<T, float>(YtY[i * factors + threadIdx.x]);
     }
     for (int index = indptr[u]; index < indptr[u + 1]; ++index) {
-      float Yi = Y[indices[index] * factors + threadIdx.x];
+      float Yi = convert<T, float>(Y[indices[index] * factors + threadIdx.x]);
       float confidence = data[index];
 
       if (confidence > 0) {
@@ -65,10 +69,10 @@ __global__ void least_squares_cg_kernel(int factors, int user_count,
       // calculate Ap = YtCuYp - without actually calculating YtCuY
       Ap = 0;
       for (int i = 0; i < factors; ++i) {
-        Ap += P[i] * YtY[i * factors + threadIdx.x];
+        Ap += P[i] * convert<T, float>(YtY[i * factors + threadIdx.x]);
       }
       for (int index = indptr[u]; index < indptr[u + 1]; ++index) {
-        float Yi = Y[indices[index] * factors + threadIdx.x];
+        float Yi = convert<T, float>(Y[indices[index] * factors + threadIdx.x]);
         float confidence = data[index];
         if (confidence < 0)
           confidence *= -1;
@@ -96,23 +100,25 @@ __global__ void least_squares_cg_kernel(int factors, int user_count,
       if (threadIdx.x == 0) {
         printf("Warning NaN Detected in row %d of %d\n", u, user_count);
       }
-      x[threadIdx.x] = 0;
-    } else {
-      x[threadIdx.x] = x_value;
+      x_value = 0;
     }
+    x[threadIdx.x] = convert<float, T>(x_value);
   }
 }
 
+template <typename T>
 __global__ void l2_regularize_kernel(int factors, float regularization,
-                                     float *YtY) {
-  YtY[threadIdx.x * factors + threadIdx.x] += regularization;
+                                     T *YtY) {
+  YtY[threadIdx.x * factors + threadIdx.x] += convert<float, T>(regularization);
 }
 
-LeastSquaresSolver::LeastSquaresSolver() {
+template <typename T>
+LeastSquaresSolver<T>::LeastSquaresSolver() {
   CHECK_CUBLAS(cublasCreate(&blas_handle));
 }
 
-void LeastSquaresSolver::calculate_yty(const Matrix<float> &Y, Matrix<float> *YtY,
+template <>
+void LeastSquaresSolver<float>::calculate_yty(const Matrix<float> &Y, Matrix<float> *YtY,
                                        float regularization) {
   if (YtY->cols != Y.cols)
     throw invalid_argument("YtY and Y should have the same number of columns");
@@ -122,6 +128,7 @@ void LeastSquaresSolver::calculate_yty(const Matrix<float> &Y, Matrix<float> *Yt
   // overcome this (like calculate YYt instead of YtY)
   int factors = Y.cols, item_count = Y.rows;
   float alpha = 1.0, beta = 0.;
+
   CHECK_CUBLAS(cublasSgemm(blas_handle, CUBLAS_OP_N, CUBLAS_OP_T, factors,
                            factors, item_count, &alpha, Y.data, factors, Y.data,
                            factors, &beta, YtY->data, factors));
@@ -132,8 +139,32 @@ void LeastSquaresSolver::calculate_yty(const Matrix<float> &Y, Matrix<float> *Yt
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 
-void LeastSquaresSolver::least_squares(const CSRMatrix &Cui, Matrix<float> *X,
-                                       const Matrix<float> &YtY, const Matrix<float> &Y,
+
+template <>
+void LeastSquaresSolver<half>::calculate_yty(const Matrix<half> &Y, Matrix<half> *YtY,
+                                       float regularization) {
+  if (YtY->cols != Y.cols)
+    throw invalid_argument("YtY and Y should have the same number of columns");
+
+  // calculate YtY: note this expects col-major (and we have row-major
+  // basically) so that we're inverting the CUBLAS_OP_T/CU_BLAS_OP_N ordering to
+  // overcome this (like calculate YYt instead of YtY)
+  int factors = Y.cols, item_count = Y.rows;
+  half alpha = 1.0, beta = 0.;
+
+  CHECK_CUBLAS(cublasHgemm(blas_handle, CUBLAS_OP_N, CUBLAS_OP_T, factors,
+                           factors, item_count, &alpha, Y.data, factors, Y.data,
+                           factors, &beta, YtY->data, factors));
+  CHECK_CUDA(cudaDeviceSynchronize());
+
+  // regularize the matrix
+  l2_regularize_kernel<<<1, factors>>>(factors, regularization, YtY->data);
+  CHECK_CUDA(cudaDeviceSynchronize());
+}
+
+template <typename T>
+void LeastSquaresSolver<T>::least_squares(const CSRMatrix &Cui, Matrix<T> *X,
+                                       const Matrix<T> &YtY, const Matrix<T> &Y,
                                        int cg_steps) const {
   int item_count = Y.rows, user_count = X->rows, factors = X->cols;
   if (X->cols != Y.cols)
@@ -164,9 +195,10 @@ void LeastSquaresSolver::least_squares(const CSRMatrix &Cui, Matrix<float> *X,
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 
+template <typename T>
 __global__ void calculate_loss_kernel(int factors, int user_count,
-                                      int item_count, const float *X,
-                                      const float *Y, const float *YtY,
+                                      int item_count, const T *X,
+                                      const T *Y, const T *YtY,
                                       const int *indptr, const int *indices,
                                       const float *data, float regularization,
                                       float *output) {
@@ -177,18 +209,19 @@ __global__ void calculate_loss_kernel(int factors, int user_count,
   float loss = 0, user_norm = 0, item_norm = 0, total_confidence = 0, r = 0;
 
   for (int u = blockIdx.x; u < user_count; u += gridDim.x) {
-    const float *x = &X[u * factors];
-    float x_value = x[threadIdx.x];
+    const T *x = &X[u * factors];
+    float x_value = convert<T, float>(x[threadIdx.x]);
 
     // calculates r = (YtCuY.dot(Xu) - 2 * YtCuPu).dot(Xu), without calculating
     // YtCuY
     r = 0;
     for (int i = 0; i < factors; ++i) {
-      r += x[i] * YtY[i * factors + threadIdx.x];
+      // TODO: is this correct?
+      r += convert<T, float>(x[i]) * convert<T, float>(YtY[i * factors + threadIdx.x]);
     }
 
     for (int index = indptr[u]; index < indptr[u + 1]; ++index) {
-      float Yi = Y[indices[index] * factors + threadIdx.x];
+      float Yi = convert<T, float>(Y[indices[index] * factors + threadIdx.x]);
       float confidence = data[index];
       if (confidence > 0) {
         r +=
@@ -206,7 +239,7 @@ __global__ void calculate_loss_kernel(int factors, int user_count,
   }
 
   for (int i = blockIdx.x; i < item_count; i += gridDim.x) {
-    float y = Y[i * factors + threadIdx.x];
+    float y = convert<T, float>(Y[i * factors + threadIdx.x]);
     item_norm += dot(y, y, shared);
   }
 
@@ -217,22 +250,18 @@ __global__ void calculate_loss_kernel(int factors, int user_count,
   }
 }
 
-float LeastSquaresSolver::calculate_loss(const CSRMatrix &Cui, const Matrix<float> &X,
-                                         const Matrix<float> &Y,
+template <typename T>
+float LeastSquaresSolver<T>::calculate_loss(const CSRMatrix &Cui, const Matrix<T> &X,
+                                         const Matrix<T> &Y,
                                          float regularization) {
   int item_count = Y.rows, factors = Y.cols, user_count = X.rows;
 
-  Matrix<float> YtY(factors, factors, NULL);
+  Matrix<T> YtY(factors, factors, NULL);
   calculate_yty(Y, &YtY, regularization);
 
-  float alpha = 1.0, beta = 0.;
-  CHECK_CUBLAS(cublasSgemm(blas_handle, CUBLAS_OP_N, CUBLAS_OP_T, factors,
-                           factors, item_count, &alpha, Y.data, factors, Y.data,
-                           factors, &beta, YtY.data, factors));
-  CHECK_CUDA(cudaDeviceSynchronize());
   float temp[2] = {0, 0};
   Matrix<float> output(2, 1, temp);
-  calculate_loss_kernel<<<1024, factors, sizeof(float) * factors>>>(
+  calculate_loss_kernel<<<1024, factors, sizeof(T) * factors>>>(
       factors, user_count, item_count, X.data, Y.data, YtY.data, Cui.indptr,
       Cui.indices, Cui.data, regularization, output.data);
   CHECK_CUDA(cudaDeviceSynchronize());
@@ -241,8 +270,13 @@ float LeastSquaresSolver::calculate_loss(const CSRMatrix &Cui, const Matrix<floa
   return temp[0] / (temp[1] + Cui.rows * Cui.cols - Cui.nonzeros);
 }
 
-LeastSquaresSolver::~LeastSquaresSolver() {
+template <typename T>
+LeastSquaresSolver<T>::~LeastSquaresSolver() {
   CHECK_CUBLAS(cublasDestroy(blas_handle));
 }
+
+template struct LeastSquaresSolver<float>;
+template struct LeastSquaresSolver<half>;
+
 } // namespace gpu
 } // namespace implicit
