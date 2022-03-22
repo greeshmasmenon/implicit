@@ -308,12 +308,12 @@ cdef class LeastSquaresSolver(object):
     def __cinit__(self):
         self.c_solver = new CppLeastSquaresSolver[float]()
 
-    def least_squares(self, CSRMatrix cui, Matrix X, Matrix YtY, Matrix Y, int cg_steps):
+    def least_squares(self, CSRMatrix cui, FloatMatrix X, FloatMatrix YtY, FloatMatrix Y, int cg_steps):
         with nogil:
             self.c_solver.least_squares(dereference(cui.c_matrix), X.c_matrix,
                                         dereference(YtY.c_matrix), dereference(Y.c_matrix),
                                         cg_steps)
-    def calculate_loss(self, CSRMatrix cui, Matrix X, Matrix Y,
+    def calculate_loss(self, CSRMatrix cui, FloatMatrix X, FloatMatrix Y,
                        float regularization):
         cdef float loss
         with nogil:
@@ -322,7 +322,7 @@ cdef class LeastSquaresSolver(object):
         return loss
 
 
-    def calculate_yty(self, Matrix Y, Matrix YtY, float regularization):
+    def calculate_yty(self, FloatMatrix Y, FloatMatrix YtY, float regularization):
         with nogil:
             self.c_solver.calculate_yty(dereference(Y.c_matrix), YtY.c_matrix, regularization)
 
@@ -330,8 +330,8 @@ cdef class LeastSquaresSolver(object):
         del self.c_solver
 
 
-def calculate_norms(Matrix items):
-    ret = Matrix(None)
+def calculate_norms(FloatMatrix items):
+    ret = FloatMatrix(None)
     ret.c_matrix = new CppMatrix[float](items.c_matrix.calculate_norms())
     return ret
 
@@ -341,7 +341,7 @@ def get_device_count():
 
 
 def bpr_update(IntVector userids, IntVector itemids, IntVector indptr,
-               Matrix X, Matrix Y,
+               FloatMatrix X, FloatMatrix Y,
                float learning_rate, float regularization, long seed, bool verify_negative):
     with nogil:
         ret = cpp_bpr_update(dereference(userids.c_vector),
