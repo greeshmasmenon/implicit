@@ -16,8 +16,7 @@ template <typename T> struct Vector {
   T *data;
 };
 
-template <typename T>
-struct Matrix {
+template <typename T> struct Matrix {
   // Create a new matrix of shape (rows, cols) - copying from `data to the
   // device (if allocate=True and data != null). If allocate=false, this assumes
   // the data is preallocated on the gpu (cupy etc) and doesn't allocate any new
@@ -46,13 +45,11 @@ struct Matrix {
   // Calculates norms for each row in the matrix
   Matrix<T> calculate_norms() const;
 
-
   int rows, cols;
   T *data;
 
   std::shared_ptr<rmm::device_uvector<T>> storage;
 };
-
 
 struct CSRMatrix {
   CSRMatrix(int rows, int cols, int nonzeros, const int *indptr,
