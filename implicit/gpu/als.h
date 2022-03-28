@@ -8,17 +8,16 @@ struct cublasContext;
 namespace implicit {
 namespace gpu {
 
-template<typename T>
 struct LeastSquaresSolver {
   explicit LeastSquaresSolver();
   ~LeastSquaresSolver();
 
-  void least_squares(const CSRMatrix &Cui, Matrix<T> *X, const Matrix<T> &YtY,
-                     const Matrix<T> &Y, int cg_steps) const;
+  void least_squares(const CSRMatrix &Cui, Matrix *X, const Matrix &YtY,
+                     const Matrix &Y, int cg_steps) const;
 
-  void calculate_yty(const Matrix<T> &Y, Matrix<T> *YtY, float regularization);
+  void calculate_yty(const Matrix &Y, Matrix *YtY, float regularization);
 
-  float calculate_loss(const CSRMatrix &Cui, const Matrix<T> &X, const Matrix<T> &Y,
+  float calculate_loss(const CSRMatrix &Cui, const Matrix &X, const Matrix &Y,
                        float regularization);
 
   cublasContext *blas_handle;

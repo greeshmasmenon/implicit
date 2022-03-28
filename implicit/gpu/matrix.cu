@@ -29,19 +29,18 @@ template struct Vector<char>;
 template struct Vector<int>;
 template struct Vector<float>;
 
-template <typename T>
-Matrix<T>::Matrix(const Matrix<T> &other, int rowid)
-    : rows(1), cols(other.cols), data(other.data + rowid * other.cols),
-      storage(other.storage) {
+Matrix::Matrix(const Matrix &other, int rowid)
+    : rows(1), cols(other.cols), data(other.at(rowid * other.cols)),
+      storage(other.storage), itemsize(other.itemsize) {
   if (rowid >= other.rows) {
     throw std::invalid_argument("row index out of bounds for matrix");
   }
 }
 
-template <typename T>
-Matrix<T>::Matrix(const Matrix<T> &other, int start_rowid, int end_rowid)
+Matrix::Matrix(const Matrix &other, int start_rowid, int end_rowid)
     : rows(end_rowid - start_rowid), cols(other.cols),
-      data(other.data + start_rowid * other.cols), storage(other.storage) {
+      data(other.at(start_rowid * other.cols)), storage(other.storage),
+      itemsize(other.itemsize) {
   if (end_rowid < start_rowid) {
     throw std::invalid_argument("end_rowid < start_rowid for matrix slice");
   }
@@ -62,24 +61,27 @@ void copy_rowids(const T *input, const int *rowids, int rows, int cols,
   });
 }
 
-template <typename T>
-Matrix<T>::Matrix(const Matrix<T> &other, const Vector<int> &rowids)
-    : rows(rowids.size), cols(other.cols) {
+Matrix::Matrix(const Matrix &other, const Vector<int> &rowids)
+    : rows(rowids.size), cols(other.cols), itemsize(other.itemsize) {
   storage.reset(
-      new rmm::device_uvector<T>(rows * cols, rmm::cuda_stream_view()));
+      new rmm::device_buffer(itemsize * rows * cols, rmm::cuda_stream_view()));
   data = storage->data();
-  copy_rowids(other.data, rowids.data, rows, cols, data);
+  // TODO:
+  if (itemsize == 4) {
+    copy_rowids<float>(other, rowids.data, rows, cols, *this);
+  } else {
+    throw std::runtime_error("unknown itemsize initializing Matrix");
+  }
 }
 
-template <typename T>
-Matrix<T>::Matrix(int rows, int cols, T *host_data, bool allocate)
-    : rows(rows), cols(cols) {
+Matrix::Matrix(int rows, int cols, void *host_data, bool allocate, int itemsize)
+    : rows(rows), cols(cols), itemsize(itemsize) {
   if (allocate) {
-    storage.reset(
-        new rmm::device_uvector<T>(rows * cols, rmm::cuda_stream_view()));
+    storage.reset(new rmm::device_buffer(itemsize * rows * cols,
+                                         rmm::cuda_stream_view()));
     data = storage->data();
     if (host_data) {
-      CHECK_CUDA(cudaMemcpy(data, host_data, rows * cols * sizeof(T),
+      CHECK_CUDA(cudaMemcpy(data, host_data, rows * cols * itemsize,
                             cudaMemcpyHostToDevice));
     }
   } else {
@@ -87,8 +89,7 @@ Matrix<T>::Matrix(int rows, int cols, T *host_data, bool allocate)
   }
 }
 
-template <typename T>
-void Matrix<T>::resize(int rows, int cols) {
+void Matrix::resize(int rows, int cols) {
   if (cols != this->cols) {
     throw std::logic_error(
         "changing number of columns in Matrix::resize is not implemented yet");
@@ -98,21 +99,21 @@ void Matrix<T>::resize(int rows, int cols) {
         "reducing number of rows in Matrix::resize is not implemented yet");
   }
   auto new_storage =
-      new rmm::device_uvector<T>(rows * cols, rmm::cuda_stream_view());
+      new rmm::device_buffer(itemsize * rows * cols, rmm::cuda_stream_view());
   CHECK_CUDA(cudaMemcpy(new_storage->data(), data,
-                        this->rows * this->cols * sizeof(T),
+                        this->rows * this->cols * itemsize,
                         cudaMemcpyDeviceToDevice));
   int extra_rows = rows - this->rows;
-  CHECK_CUDA(cudaMemset(new_storage->data() + this->rows * this->cols, 0,
-                        extra_rows * cols * sizeof(T)));
   storage.reset(new_storage);
   data = storage->data();
+  CHECK_CUDA(
+      cudaMemset(at(this->rows * this->cols), 0, extra_rows * cols * itemsize));
+
   this->rows = rows;
   this->cols = cols;
 }
 
-template <typename T>
-void Matrix<T>::assign_rows(const Vector<int> &rowids, const Matrix<T> &other) {
+void Matrix::assign_rows(const Vector<int> &rowids, const Matrix &other) {
   if (other.cols != cols) {
     throw std::invalid_argument(
         "column dimensionality mismatch in Matrix::assign_rows");
@@ -122,8 +123,9 @@ void Matrix<T>::assign_rows(const Vector<int> &rowids, const Matrix<T> &other) {
   int other_cols = other.cols, other_rows = other.rows;
 
   int *rowids_data = rowids.data;
-  T *other_data = other.data;
-  T *self_data = data;
+
+  const float *other_data = other;
+  float *self_data = *this;
 
   thrust::for_each(count, count + (other_rows * other_cols),
                    [=] __device__(int i) {
@@ -151,8 +153,7 @@ __global__ void calculate_norms_kernel(const T *input, int rows, int cols,
   }
 }
 
-template <typename T>
-Matrix<T> Matrix<T>::calculate_norms() const {
+Matrix Matrix::calculate_norms() const {
   int devId;
   CHECK_CUDA(cudaGetDevice(&devId));
 
@@ -163,22 +164,26 @@ Matrix<T> Matrix<T>::calculate_norms() const {
   int block_count = 256 * multiprocessor_count;
   int thread_count = cols;
 
-  Matrix<T> output(1, rows, NULL);
-  calculate_norms_kernel<<<block_count, thread_count>>>(
-      data, rows, cols, output.data);
+  Matrix output(1, rows, NULL);
+
+  if (itemsize == 4) {
+    calculate_norms_kernel<float>
+        <<<block_count, thread_count>>>(*this, rows, cols, output);
+    // TODO  } else if (itemsize == 2) {
+    //    calculate_norms_kernel<half><<<block_count, thread_count>>>(
+    //        data, rows, cols, output.data);
+  } else {
+    throw std::runtime_error("unknown itemsize in calculate_norms");
+  }
 
   CHECK_CUDA(cudaDeviceSynchronize());
   return output;
 }
 
-template <typename T>
-void Matrix<T>::to_host(T *out) const {
-  CHECK_CUDA(cudaMemcpy(out, data, rows * cols * sizeof(T),
-                        cudaMemcpyDeviceToHost));
+void Matrix::to_host(void *out) const {
+  CHECK_CUDA(
+      cudaMemcpy(out, data, rows * cols * itemsize, cudaMemcpyDeviceToHost));
 }
-
-template struct Matrix<float>;
-template struct Matrix<half>;
 
 CSRMatrix::CSRMatrix(int rows, int cols, int nonzeros, const int *indptr_,
                      const int *indices_, const float *data_)

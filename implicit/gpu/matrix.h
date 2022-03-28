@@ -16,39 +16,62 @@ template <typename T> struct Vector {
   T *data;
 };
 
-template <typename T> struct Matrix {
+struct Matrix {
   // Create a new matrix of shape (rows, cols) - copying from `data to the
   // device (if allocate=True and data != null). If allocate=false, this assumes
   // the data is preallocated on the gpu (cupy etc) and doesn't allocate any new
   // storage
-  Matrix(int rows, int cols, T *data = NULL, bool allocate = true);
+  Matrix(int rows, int cols, void *data = NULL, bool allocate = true,
+         int itemsize = 4);
 
   // Create a new Matrix by slicing a single row from an existing one. The
   // underlying storage buffer is shared in this case.
-  Matrix(const Matrix<T> &other, int rowid);
+  Matrix(const Matrix &other, int rowid);
 
   // Slice a contiguous series of rows from this Matrix. The underlying storge
   // buffer is shared here.
-  Matrix(const Matrix<T> &other, int start_rowid, int end_rowid);
+  Matrix(const Matrix &other, int start_rowid, int end_rowid);
 
   // select a bunch of rows from this matrix. this creates a copy
-  Matrix(const Matrix<T> &other, const Vector<int> &rowids);
+  Matrix(const Matrix &other, const Vector<int> &rowids);
 
   void resize(int rows, int cols);
-  void assign_rows(const Vector<int> &rowids, const Matrix<T> &other);
+  void assign_rows(const Vector<int> &rowids, const Matrix &other);
 
-  Matrix() : rows(0), cols(0), data(NULL) {}
+  Matrix() : rows(0), cols(0), data(NULL), itemsize(4) {}
 
   // Copy the Matrix to host memory.
-  void to_host(T *output) const;
+  void to_host(void *output) const;
 
   // Calculates norms for each row in the matrix
-  Matrix<T> calculate_norms() const;
+  Matrix calculate_norms() const;
 
   int rows, cols;
-  T *data;
+  void *data;
+  int itemsize;
 
-  std::shared_ptr<rmm::device_uvector<T>> storage;
+  operator const float *() const {
+    if (itemsize != 4) {
+      throw std::runtime_error("can't cast Matrix to const float*");
+    }
+
+    return reinterpret_cast<const float *>(data);
+  }
+
+  operator float *() {
+    if (itemsize != 4) {
+      throw std::runtime_error("can't cast Matrix to const float*");
+    }
+
+    return reinterpret_cast<float *>(data);
+  }
+
+  void *at(size_t element) const {
+    char *x = reinterpret_cast<char *>(data);
+    return x + itemsize * element;
+  }
+
+  std::shared_ptr<rmm::device_buffer> storage;
 };
 
 struct CSRMatrix {

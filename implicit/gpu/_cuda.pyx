@@ -27,12 +27,12 @@ cdef class RandomState(object):
 
     def uniform(self, rows, cols, float low=0, float high=1.0):
         ret = Matrix(None)
-        ret.c_matrix = new CppMatrix[float](self.c_random.uniform(rows, cols, low, high))
+        ret.c_matrix = new CppMatrix(self.c_random.uniform(rows, cols, low, high))
         return ret
 
     def randn(self, rows, cols, float mean=0, float stddev=1):
         ret = Matrix(None)
-        ret.c_matrix = new CppMatrix[float](self.c_random.randn(rows, cols, mean, stddev))
+        ret.c_matrix = new CppMatrix(self.c_random.randn(rows, cols, mean, stddev))
         return ret
 
     def __dealloc__(self):
@@ -50,7 +50,7 @@ cdef class KnnQuery(object):
 
     def topk(self, Matrix items, Matrix m, int k, Matrix item_norms=None,
              COOMatrix query_filter=None, IntVector item_filter=None):
-        cdef CppMatrix[float] * queries = m.c_matrix
+        cdef CppMatrix * queries = m.c_matrix
         cdef CppCOOMatrix * c_query_filter = NULL
         cdef CppVector[int] * c_item_filter = NULL
         cdef int rows = queries.rows
@@ -59,14 +59,13 @@ cdef class KnnQuery(object):
 
         cdef float * c_item_norms = NULL
         if item_norms is not None:
-            c_item_norms = item_norms.c_matrix.data
+            c_item_norms = <float *>item_norms.c_matrix.data
 
         if query_filter is not None:
             c_query_filter = query_filter.c_matrix
 
         if item_filter is not None:
             c_item_filter = item_filter.c_vector
-
 
         indices = np.zeros((rows, k), dtype="int32")
         distances = np.zeros((rows, k), dtype="float32")
@@ -80,7 +79,7 @@ cdef class KnnQuery(object):
         return indices, distances
 
 cdef class Matrix(object):
-    cdef CppMatrix[float] * c_matrix
+    cdef CppMatrix * c_matrix
 
     def __cinit__(self, X):
         if X is None:
@@ -95,16 +94,17 @@ cdef class Matrix(object):
         if cai:
             shape = cai["shape"]
             data = cai["data"][0]
-            self.c_matrix = new CppMatrix[float](shape[0], shape[1], <float*>data, False)
+            itemsize = int(cai["typestr"][2])
+            self.c_matrix = new CppMatrix(shape[0], shape[1], <void*>data, False, itemsize)
         else:
             # otherwise assume we're a buffer on host
             c_X = X
-            self.c_matrix = new CppMatrix[float](X.shape[0], X.shape[1], &c_X[0, 0], True)
+            self.c_matrix = new CppMatrix(X.shape[0], X.shape[1], &c_X[0, 0], True, 4)
 
     @classmethod
     def zeros(cls, rows, cols):
         ret = Matrix(None)
-        ret.c_matrix = new CppMatrix[float](rows, cols, NULL, True)
+        ret.c_matrix = new CppMatrix(rows, cols, NULL, True, 4)
         return ret
 
     @property
@@ -121,11 +121,11 @@ cdef class Matrix(object):
 
             start = idx.start if idx.start is not None else 0
             stop = idx.stop if idx.stop is not None else self.c_matrix.rows
-            ret.c_matrix = new CppMatrix[float](dereference(self.c_matrix), start, stop)
+            ret.c_matrix = new CppMatrix(dereference(self.c_matrix), start, stop)
 
         elif isinstance(idx, int):
             i = idx
-            ret.c_matrix = new CppMatrix[float](dereference(self.c_matrix), i)
+            ret.c_matrix = new CppMatrix(dereference(self.c_matrix), i)
 
         else:
             try:
@@ -143,7 +143,7 @@ cdef class Matrix(object):
                 raise IndexError(f"row id out of range for selecting items from matrix")
 
             ids = IntVector(idx)
-            ret.c_matrix = new CppMatrix[float](dereference(self.c_matrix), dereference(ids.c_vector))
+            ret.c_matrix = new CppMatrix(dereference(self.c_matrix), dereference(ids.c_vector))
 
         return ret
 
@@ -211,10 +211,10 @@ cdef class COOMatrix(object):
 
 
 cdef class LeastSquaresSolver(object):
-    cdef CppLeastSquaresSolver[float] * c_solver
+    cdef CppLeastSquaresSolver * c_solver
 
     def __cinit__(self):
-        self.c_solver = new CppLeastSquaresSolver[float]()
+        self.c_solver = new CppLeastSquaresSolver()
 
     def least_squares(self, CSRMatrix cui, Matrix X, Matrix YtY, Matrix Y, int cg_steps):
         with nogil:
@@ -240,7 +240,7 @@ cdef class LeastSquaresSolver(object):
 
 def calculate_norms(Matrix items):
     ret = Matrix(None)
-    ret.c_matrix = new CppMatrix[float](items.c_matrix.calculate_norms())
+    ret.c_matrix = new CppMatrix(items.c_matrix.calculate_norms())
     return ret
 
 

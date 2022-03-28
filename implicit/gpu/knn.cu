@@ -87,7 +87,7 @@ KnnQuery::KnnQuery(size_t temp_memory) {
   CHECK_CUBLAS(cublasCreate(&blas_handle));
 }
 
-void KnnQuery::topk(const Matrix<float> &items, const Matrix<float> &query, int k,
+void KnnQuery::topk(const Matrix &items, const Matrix &query, int k,
                     int *indices, float *distances, float *item_norms,
                     const COOMatrix *query_filter, Vector<int> *item_filter) {
   if (query.cols != items.cols) {
@@ -158,13 +158,13 @@ void KnnQuery::topk(const Matrix<float> &items, const Matrix<float> &query, int 
 
   rmm::device_uvector<float> temp_mem(batch_size * temp_distances_cols, stream,
                                       mr.get());
-  Matrix<float> temp_distances(batch_size, temp_distances_cols, temp_mem.data(),
+  Matrix temp_distances(batch_size, temp_distances_cols, temp_mem.data(),
                         false);
 
   // Fill temp_distances if we're padding so that results don't appear
   if (padding) {
-    thrust::device_ptr<float> data =
-        thrust::device_pointer_cast(temp_distances.data);
+    float *temp_data = temp_distances;
+    thrust::device_ptr<float> data = thrust::device_pointer_cast(temp_data);
     thrust::fill(data, data + temp_distances.rows * temp_distances.cols,
                  -FLT_MAX);
   }
@@ -172,23 +172,23 @@ void KnnQuery::topk(const Matrix<float> &items, const Matrix<float> &query, int 
   for (int start = 0; start < query.rows; start += batch_size) {
     auto end = std::min(query.rows, start + static_cast<int>(batch_size));
 
-    Matrix<float> batch(query, start, end);
+    Matrix batch(query, start, end);
     temp_distances.rows = batch.rows;
 
     // matrix multiple the items by the batch, store in distances
     float alpha = 1.0, beta = 0.;
 
     CHECK_CUBLAS(cublasSgemm(blas_handle, CUBLAS_OP_T, CUBLAS_OP_N, items.rows,
-                             batch.rows, items.cols, &alpha, items.data,
-                             items.cols, batch.data, batch.cols, &beta,
-                             temp_distances.data, temp_distances.cols));
+                             batch.rows, items.cols, &alpha, items, items.cols,
+                             batch, batch.cols, &beta, temp_distances,
+                             temp_distances.cols));
 
     // If we have norms (cosine distance etc) normalize the results here
     if (item_norms != NULL) {
       auto count = thrust::make_counting_iterator<size_t>(0);
       int cols = temp_distances.cols;
       int item_norm_cols = items.rows;
-      float *data = temp_distances.data;
+      float *data = temp_distances;
       thrust::for_each(count,
                        count + (static_cast<size_t>(temp_distances.rows) *
                                 static_cast<size_t>(temp_distances.cols)),
@@ -202,7 +202,7 @@ void KnnQuery::topk(const Matrix<float> &items, const Matrix<float> &query, int 
 
     if (item_filter != NULL) {
       auto count = thrust::make_counting_iterator<size_t>(0);
-      float *data = temp_distances.data;
+      float *data = temp_distances;
       int *items = item_filter->data;
       int items_size = item_filter->size;
       int cols = temp_distances.cols;
@@ -219,7 +219,7 @@ void KnnQuery::topk(const Matrix<float> &items, const Matrix<float> &query, int 
       auto count = thrust::make_counting_iterator<size_t>(0);
       int *row = query_filter->row;
       int *col = query_filter->col;
-      float *data = temp_distances.data;
+      float *data = temp_distances;
       int items = temp_distances.cols;
       float filter_distance = FLT_FILTER_DISTANCE;
       thrust::for_each(
@@ -247,7 +247,7 @@ void KnnQuery::topk(const Matrix<float> &items, const Matrix<float> &query, int 
   }
 }
 
-void KnnQuery::argpartition(const Matrix<float> &items, int k, int *indices,
+void KnnQuery::argpartition(const Matrix &items, int k, int *indices,
                             float *distances, bool allow_tiling) {
   k = std::min(k, items.cols);
 
@@ -282,8 +282,9 @@ void KnnQuery::argpartition(const Matrix<float> &items, int k, int *indices,
     rmm::device_uvector<int> temp_indices(rows_tile * k, stream, mr.get());
     rmm::device_uvector<float> temp_distances(rows_tile * k, stream, mr.get());
 
+    const float *items_data = items;
     faiss::gpu::DeviceTensor<float, 2, true> items_tensor(
-        const_cast<float *>(items.data), {rows_tile, cols_tile});
+        const_cast<float *>(items_data), {rows_tile, cols_tile});
     faiss::gpu::DeviceTensor<float, 2, true> temp_distances_tensor(
         temp_distances.data(), {rows_tile, k});
     faiss::gpu::DeviceTensor<int, 2, true> temp_indices_tensor(
@@ -313,8 +314,11 @@ void KnnQuery::argpartition(const Matrix<float> &items, int k, int *indices,
                                    temp_input_indices_tensor, distances_tensor,
                                    indices_tensor, true, k, 0);
   } else {
+
+    const float *items_data = items;
+
     faiss::gpu::DeviceTensor<float, 2, true> items_tensor(
-        const_cast<float *>(items.data), {rows, cols});
+        const_cast<float *>(items_data), {rows, cols});
     faiss::gpu::DeviceTensor<float, 2, true> distances_tensor(distances,
                                                               {rows, k});
     faiss::gpu::DeviceTensor<int, 2, true> indices_tensor(indices, {rows, k});
@@ -325,7 +329,7 @@ void KnnQuery::argpartition(const Matrix<float> &items, int k, int *indices,
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 
-void KnnQuery::argsort(const Matrix<float> &items, int *indices, float *distances) {
+void KnnQuery::argsort(const Matrix &items, int *indices, float *distances) {
   // We can't do this in place https://github.com/NVIDIA/cub/issues/238 ?
   // so generate temp memory for this
 
@@ -348,28 +352,29 @@ void KnnQuery::argsort(const Matrix<float> &items, int *indices, float *distance
   size_t temp_size = 0;
 
   // sort the values.
+  const float *data = items;
   if (items.rows > 1) {
     auto err = cub::DeviceSegmentedRadixSort::SortPairsDescending(
-        NULL, temp_size, items.data, distances, temp_indices.data(), indices,
+        NULL, temp_size, data, distances, temp_indices.data(), indices,
         items.rows * items.cols, items.rows, segment_offsets,
         segment_offsets + 1);
     CHECK_CUDA(err);
     temp_mem = mr->allocate(temp_size, stream);
     err = cub::DeviceSegmentedRadixSort::SortPairsDescending(
-        temp_mem, temp_size, items.data, distances, temp_indices.data(),
-        indices, items.rows * items.cols, items.rows, segment_offsets,
+        temp_mem, temp_size, data, distances, temp_indices.data(), indices,
+        items.rows * items.cols, items.rows, segment_offsets,
         segment_offsets + 1);
     CHECK_CUDA(err);
   } else {
     size_t temp_size = 0;
     auto err = cub::DeviceRadixSort::SortPairsDescending(
-        NULL, temp_size, items.data, distances, temp_indices.data(), indices,
+        NULL, temp_size, data, distances, temp_indices.data(), indices,
         items.cols);
     CHECK_CUDA(err);
     temp_mem = mr->allocate(temp_size, stream);
     err = cub::DeviceRadixSort::SortPairsDescending(
-        temp_mem, temp_size, items.data, distances, temp_indices.data(),
-        indices, items.cols);
+        temp_mem, temp_size, data, distances, temp_indices.data(), indices,
+        items.cols);
     CHECK_CUDA(err);
   }
   mr->deallocate(temp_mem, temp_size, stream);

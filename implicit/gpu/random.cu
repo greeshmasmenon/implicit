@@ -16,12 +16,13 @@ RandomState::RandomState(long seed) {
   CHECK_CURAND(curandSetPseudoRandomGeneratorSeed(rng, seed));
 }
 
-Matrix<float> RandomState::uniform(int rows, int cols, float low, float high) {
-  Matrix<float> ret(rows, cols, NULL);
-  CHECK_CURAND(curandGenerateUniform(rng, ret.data, rows * cols));
+Matrix RandomState::uniform(int rows, int cols, float low, float high) {
+  Matrix ret(rows, cols, NULL);
+  CHECK_CURAND(curandGenerateUniform(rng, ret, rows * cols));
 
   if ((low != 0.0) || (high != 1.0)) {
-    auto start = thrust::device_pointer_cast(ret.data);
+    float *data = ret;
+    auto start = thrust::device_pointer_cast(data);
     thrust::transform(start, start + rows * cols, start,
                       thrust::placeholders::_1 =
                           thrust::placeholders::_1 * (high - low) + low);
@@ -30,9 +31,9 @@ Matrix<float> RandomState::uniform(int rows, int cols, float low, float high) {
   return ret;
 }
 
-Matrix<float> RandomState::randn(int rows, int cols, float mean, float stddev) {
-  Matrix<float> ret(rows, cols, NULL);
-  CHECK_CURAND(curandGenerateNormal(rng, ret.data, rows * cols, mean, stddev));
+Matrix RandomState::randn(int rows, int cols, float mean, float stddev) {
+  Matrix ret(rows, cols, NULL);
+  CHECK_CURAND(curandGenerateNormal(rng, ret, rows * cols, mean, stddev));
   return ret;
 }
 
