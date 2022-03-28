@@ -98,7 +98,7 @@ least_squares_cg_kernel(int factors, int user_count, int item_count, T *X,
     // complain and don't let it perpetuate
     if (isnan(rsold)) {
       if (threadIdx.x == 0) {
-        printf("Warning NaN Detected in row %d of %d\n", u, user_count);
+        // printf("Warning NaN Detected in row %d of %d\n", u, user_count);
       }
       x_value = 0;
     }
@@ -121,44 +121,38 @@ void LeastSquaresSolver::calculate_yty(const Matrix &Y, Matrix *YtY,
   if (YtY->cols != Y.cols)
     throw invalid_argument("YtY and Y should have the same number of columns");
 
-  // calculate YtY: note this expects col-major (and we have row-major
-  // basically) so that we're inverting the CUBLAS_OP_T/CU_BLAS_OP_N ordering to
-  // overcome this (like calculate YYt instead of YtY)
-  int factors = Y.cols, item_count = Y.rows;
-  float alpha = 1.0, beta = 0.;
-
-  CHECK_CUBLAS(cublasSgemm(blas_handle, CUBLAS_OP_N, CUBLAS_OP_T, factors,
-                           factors, item_count, &alpha, Y, factors, Y, factors,
-                           &beta, *YtY, factors));
-  CHECK_CUDA(cudaDeviceSynchronize());
-
-  // regularize the matrix
-  l2_regularize_kernel<float><<<1, factors>>>(factors, regularization, *YtY);
-  CHECK_CUDA(cudaDeviceSynchronize());
-}
-
-/* TODO: dispatch in main function based off Matrix.itemsize
-template <>
-void LeastSquaresSolver<half>::calculate_yty(const Matrix<half> &Y, Matrix<half>
-*YtY, float regularization) { if (YtY->cols != Y.cols) throw
-invalid_argument("YtY and Y should have the same number of columns");
+  if (Y.itemsize != YtY->itemsize) {
+    throw invalid_argument("YtY and Y should have the same dtype");
+  }
 
   // calculate YtY: note this expects col-major (and we have row-major
   // basically) so that we're inverting the CUBLAS_OP_T/CU_BLAS_OP_N ordering to
   // overcome this (like calculate YYt instead of YtY)
   int factors = Y.cols, item_count = Y.rows;
-  half alpha = 1.0, beta = 0.;
+  if (Y.itemsize == 4) {
+    float alpha = 1.0, beta = 0.;
 
-  CHECK_CUBLAS(cublasHgemm(blas_handle, CUBLAS_OP_N, CUBLAS_OP_T, factors,
-                           factors, item_count, &alpha, Y.data, factors, Y.data,
-                           factors, &beta, YtY->data, factors));
-  CHECK_CUDA(cudaDeviceSynchronize());
+    CHECK_CUBLAS(cublasSgemm(blas_handle, CUBLAS_OP_N, CUBLAS_OP_T, factors,
+                             factors, item_count, &alpha, Y, factors, Y,
+                             factors, &beta, *YtY, factors));
+    CHECK_CUDA(cudaDeviceSynchronize());
 
-  // regularize the matrix
-  l2_regularize_kernel<<<1, factors>>>(factors, regularization, YtY->data);
-  CHECK_CUDA(cudaDeviceSynchronize());
+    // regularize the matrix
+    l2_regularize_kernel<float><<<1, factors>>>(factors, regularization, *YtY);
+    CHECK_CUDA(cudaDeviceSynchronize());
+  } else if (Y.itemsize == 2) {
+    half alpha = 1.0, beta = 0.;
+
+    CHECK_CUBLAS(cublasHgemm(blas_handle, CUBLAS_OP_N, CUBLAS_OP_T, factors,
+                             factors, item_count, &alpha, Y, factors, Y,
+                             factors, &beta, *YtY, factors));
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    // regularize the matrix
+    l2_regularize_kernel<half><<<1, factors>>>(factors, regularization, *YtY);
+    CHECK_CUDA(cudaDeviceSynchronize());
+  }
 }
-*/
 
 void LeastSquaresSolver::least_squares(const CSRMatrix &Cui, Matrix *X,
                                        const Matrix &YtY, const Matrix &Y,
@@ -172,6 +166,10 @@ void LeastSquaresSolver::least_squares(const CSRMatrix &Cui, Matrix *X,
     throw invalid_argument("Dimensionality mismatch between rows of Cui and X");
   if (Cui.cols > Y.rows)
     throw invalid_argument("Dimensionality mismatch between cols of Cui and Y");
+  if (Y.itemsize != YtY.itemsize)
+    throw invalid_argument("YtY and Y should have the same dtype");
+  if (Y.itemsize != X->itemsize)
+    throw invalid_argument("X and Y should have the same dtype");
 
   // TODO: multi-gpu support
   int devId;
@@ -183,12 +181,22 @@ void LeastSquaresSolver::least_squares(const CSRMatrix &Cui, Matrix *X,
 
   int block_count = 256 * multiprocessor_count;
   int thread_count = factors;
-  int shared_memory_size = sizeof(float) * (2 * factors);
+  int shared_memory_size = sizeof(Y.itemsize) * (2 * factors);
 
-  least_squares_cg_kernel<float>
-      <<<block_count, thread_count, shared_memory_size>>>(
-          factors, user_count, item_count, *X, Y, YtY, Cui.indptr, Cui.indices,
-          Cui.data, cg_steps);
+  if (Y.itemsize == 4) {
+    least_squares_cg_kernel<float>
+        <<<block_count, thread_count, shared_memory_size>>>(
+            factors, user_count, item_count, *X, Y, YtY, Cui.indptr,
+            Cui.indices, Cui.data, cg_steps);
+  } else if (Y.itemsize == 2) {
+    least_squares_cg_kernel<half>
+        <<<block_count, thread_count, shared_memory_size>>>(
+            factors, user_count, item_count, *X, Y, YtY, Cui.indptr,
+            Cui.indices, Cui.data, cg_steps);
+  } else {
+    throw invalid_argument(
+        "Unknown itemsize in LeastSquaresSolver::least_squares");
+  }
 
   CHECK_CUDA(cudaDeviceSynchronize());
 }
@@ -259,6 +267,7 @@ float LeastSquaresSolver::calculate_loss(const CSRMatrix &Cui, const Matrix &X,
   float temp[2] = {0, 0};
   Matrix output(2, 1, temp);
 
+  // TODO: half support
   calculate_loss_kernel<float><<<1024, factors, X.itemsize * factors>>>(
       factors, user_count, item_count, X, Y, YtY, Cui.indptr, Cui.indices,
       Cui.data, regularization, output);

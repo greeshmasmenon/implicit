@@ -5,6 +5,7 @@ import numpy as np
 from cython.operator import dereference
 
 from cython cimport view
+from libc.stdint cimport uint16_t
 from libcpp cimport bool
 from libcpp.utility cimport move, pair
 
@@ -152,14 +153,30 @@ cdef class Matrix(object):
         rows = IntVector(np.array(rowids).astype("int32"))
         self.c_matrix.assign_rows(dereference(rows.c_vector), dereference(other.c_matrix))
 
+    def astype(self, int itemsize):
+        ret = Matrix(None)
+        ret.c_matrix = new CppMatrix(self.c_matrix.astype(itemsize))
+        return ret
+
     def resize(self, int rows, int cols):
         self.c_matrix.resize(rows, cols)
 
     def to_numpy(self):
-        ret = np.zeros((self.c_matrix.rows, self.c_matrix.cols), dtype="float32")
-        cdef float[:, :] temp = ret
-        self.c_matrix.to_host(&temp[0, 0])
-        return ret
+        cdef float[:, :] temp_float
+        cdef uint16_t[:, :] temp_half
+
+        if self.c_matrix.itemsize == 4:
+            ret = np.zeros((self.c_matrix.rows, self.c_matrix.cols), dtype="float32")
+            temp_float = ret
+            self.c_matrix.to_host(&temp_float[0, 0])
+            return ret
+        elif self.c_matrix.itemsize == 2:
+            ret = np.zeros((self.c_matrix.rows, self.c_matrix.cols), dtype="float16")
+            temp_half = ret.view(np.uint16)
+            self.c_matrix.to_host(&temp_half[0, 0])
+            return ret
+        else:
+            raise ValueError(f"Invalid itemsize {self.c_matrix.itemsize}")
 
     def __repr__(self):
         return f"Matrix({str(self.to_numpy())})"

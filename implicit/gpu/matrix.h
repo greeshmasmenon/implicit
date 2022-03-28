@@ -2,6 +2,8 @@
 #define IMPLICIT_GPU_MATRIX_H_
 #include <memory>
 
+#include <cuda_fp16.h>
+
 #include <rmm/device_uvector.hpp>
 
 namespace implicit {
@@ -38,6 +40,8 @@ struct Matrix {
   void resize(int rows, int cols);
   void assign_rows(const Vector<int> &rowids, const Matrix &other);
 
+  Matrix astype(int itemsize) const;
+
   Matrix() : rows(0), cols(0), data(NULL), itemsize(4) {}
 
   // Copy the Matrix to host memory.
@@ -54,7 +58,6 @@ struct Matrix {
     if (itemsize != 4) {
       throw std::runtime_error("can't cast Matrix to const float*");
     }
-
     return reinterpret_cast<const float *>(data);
   }
 
@@ -62,8 +65,21 @@ struct Matrix {
     if (itemsize != 4) {
       throw std::runtime_error("can't cast Matrix to const float*");
     }
-
     return reinterpret_cast<float *>(data);
+  }
+
+  operator const half *() const {
+    if (itemsize != 2) {
+      throw std::runtime_error("can't cast Matrix to const half*");
+    }
+    return reinterpret_cast<const half *>(data);
+  }
+
+  operator half *() {
+    if (itemsize != 2) {
+      throw std::runtime_error("can't cast Matrix to const half*");
+    }
+    return reinterpret_cast<half *>(data);
   }
 
   void *at(size_t element) const {

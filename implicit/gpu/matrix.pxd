@@ -26,8 +26,10 @@ cdef extern from "implicit/gpu/matrix.h" namespace "implicit::gpu" nogil:
         void resize(int rows, int cols) except +
         void assign_rows(const Vector[int] & rowids, const Matrix & other) except +
         Matrix calculate_norms() except +
+        Matrix astype(int itemsize) except +
         int rows, cols
         void * data
+        int itemsize
 
 
     cdef cppclass KnnQuery:

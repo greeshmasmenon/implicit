@@ -136,6 +136,35 @@ void Matrix::assign_rows(const Vector<int> &rowids, const Matrix &other) {
                    });
 }
 
+template <typename I, typename O>
+void convert_array(const I *input, size_t elements, O *output) {
+  auto count = thrust::make_counting_iterator<size_t>(0);
+  thrust::for_each(count, count + elements, [=] __device__(size_t i) {
+    output[i] = convert<I, O>(input[i]);
+  });
+}
+
+Matrix Matrix::astype(int itemsize) const {
+  if (itemsize == this->itemsize) {
+    return *this;
+  }
+
+  Matrix ret(rows, cols, NULL, true, itemsize);
+  if (this->itemsize == 2 && itemsize == 4) {
+    const half *input_data = *this;
+    float *output_data = ret;
+    convert_array<half, float>(input_data, rows * cols, output_data);
+  } else if (this->itemsize == 4 && itemsize == 2) {
+    const float *input_data = *this;
+    half *output_data = ret;
+    convert_array<float, half>(input_data, rows * cols, output_data);
+  } else {
+    throw std::runtime_error(
+        "don't know how to interpret itemsize parameter to Matrix::astype");
+  }
+  return ret;
+}
+
 template <typename T>
 __global__ void calculate_norms_kernel(const T *input, int rows, int cols,
                                        T *output) {
