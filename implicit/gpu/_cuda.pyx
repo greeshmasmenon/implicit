@@ -87,7 +87,8 @@ cdef class Matrix(object):
             self.c_matrix = NULL
             return
 
-        cdef float[:, :] c_X
+        cdef float[:, :] temp_float
+        cdef uint16_t[:, :] temp_half
         cdef long data
 
         # see if the input support CAI (cupy/pytorch/cudf etc)
@@ -99,8 +100,15 @@ cdef class Matrix(object):
             self.c_matrix = new CppMatrix(shape[0], shape[1], <void*>data, False, itemsize)
         else:
             # otherwise assume we're a buffer on host
-            c_X = X
-            self.c_matrix = new CppMatrix(X.shape[0], X.shape[1], &c_X[0, 0], True, 4)
+
+            if X.dtype.char == "f":
+                temp_float = X
+                self.c_matrix = new CppMatrix(X.shape[0], X.shape[1], &temp_float[0, 0], True, 4)
+            elif X.dtype.char == "e":
+                temp_half = X.view(np.uint16)
+                self.c_matrix = new CppMatrix(X.shape[0], X.shape[1], &temp_half[0, 0], True, 2)
+            else:
+                raise ValueError(f"unhandled dtype for GPU Matrix {X.dtype}")
 
     @classmethod
     def zeros(cls, rows, cols):

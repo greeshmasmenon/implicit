@@ -67,6 +67,8 @@ class AlternatingLeastSquares(MatrixFactorizationBase):
         self.random_state = random_state
         self.cg_steps = 3
 
+        self._itemsize = 4
+
         # cached access to properties
         self._solver = None
         self._YtY = None
@@ -124,10 +126,13 @@ class AlternatingLeastSquares(MatrixFactorizationBase):
             self.user_factors = random_state.uniform(
                 users, self.factors, low=-0.5 / self.factors, high=0.5 / self.factors
             )
+            self.user_factors = self.user_factors.astype(self._itemsize)
+
         if self.item_factors is None:
             self.item_factors = random_state.uniform(
                 items, self.factors, low=-0.5 / self.factors, high=0.5 / self.factors
             )
+            self.item_factors = self.item_factors.astype(self._itemsize)
 
         log.debug("Initialized factors in %s", time.time() - s)
 
@@ -140,8 +145,8 @@ class AlternatingLeastSquares(MatrixFactorizationBase):
         Y = self.item_factors
         loss = None
 
-        self._YtY = implicit.gpu.Matrix.zeros(self.factors, self.factors)
-        self._XtX = implicit.gpu.Matrix.zeros(self.factors, self.factors)
+        self._YtY = implicit.gpu.Matrix.zeros(self.factors, self.factors).astype(self._itemsize)
+        self._XtX = implicit.gpu.Matrix.zeros(self.factors, self.factors).astype(self._itemsize)
 
         log.debug("Running %i ALS iterations", self.iterations)
         with tqdm(total=self.iterations, disable=not show_progress) as progress:
@@ -169,7 +174,7 @@ class AlternatingLeastSquares(MatrixFactorizationBase):
 
     def recalculate_user(self, userid, user_items):
         users = 1 if np.isscalar(userid) else len(userid)
-        user_factors = implicit.gpu.Matrix.zeros(users, self.factors)
+        user_factors = implicit.gpu.Matrix.zeros(users, self.factors).astype(self._itemsize)
         Cui = implicit.gpu.CSRMatrix(user_items)
 
         self.solver.least_squares(
@@ -179,7 +184,7 @@ class AlternatingLeastSquares(MatrixFactorizationBase):
 
     def recalculate_item(self, itemid, item_users):
         items = 1 if np.isscalar(itemid) else len(itemid)
-        item_factors = implicit.gpu.Matrix.zeros(items, self.factors)
+        item_factors = implicit.gpu.Matrix.zeros(items, self.factors).astype(self._itemsize)
         Ciu = implicit.gpu.CSRMatrix(item_users)
         self.solver.least_squares(
             Ciu, item_factors, self.XtX, self.user_factors, cg_steps=self.factors

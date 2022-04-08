@@ -66,9 +66,10 @@ Matrix::Matrix(const Matrix &other, const Vector<int> &rowids)
   storage.reset(
       new rmm::device_buffer(itemsize * rows * cols, rmm::cuda_stream_view()));
   data = storage->data();
-  // TODO:
   if (itemsize == 4) {
     copy_rowids<float>(other, rowids.data, rows, cols, *this);
+  } else if (itemsize == 2) {
+    copy_rowids<half>(other, rowids.data, rows, cols, *this);
   } else {
     throw std::runtime_error("unknown itemsize initializing Matrix");
   }
@@ -193,14 +194,14 @@ Matrix Matrix::calculate_norms() const {
   int block_count = 256 * multiprocessor_count;
   int thread_count = cols;
 
-  Matrix output(1, rows, NULL);
+  Matrix output(1, rows, NULL, true, itemsize);
 
   if (itemsize == 4) {
     calculate_norms_kernel<float>
         <<<block_count, thread_count>>>(*this, rows, cols, output);
-    // TODO  } else if (itemsize == 2) {
-    //    calculate_norms_kernel<half><<<block_count, thread_count>>>(
-    //        data, rows, cols, output.data);
+  } else if (itemsize == 2) {
+    calculate_norms_kernel<half>
+        <<<block_count, thread_count>>>(*this, rows, cols, output);
   } else {
     throw std::runtime_error("unknown itemsize in calculate_norms");
   }

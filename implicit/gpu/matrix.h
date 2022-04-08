@@ -63,7 +63,7 @@ struct Matrix {
 
   operator float *() {
     if (itemsize != 4) {
-      throw std::runtime_error("can't cast Matrix to const float*");
+      throw std::runtime_error("can't cast Matrix to float*");
     }
     return reinterpret_cast<float *>(data);
   }
@@ -77,7 +77,7 @@ struct Matrix {
 
   operator half *() {
     if (itemsize != 2) {
-      throw std::runtime_error("can't cast Matrix to const half*");
+      throw std::runtime_error("can't cast Matrix to half*");
     }
     return reinterpret_cast<half *>(data);
   }

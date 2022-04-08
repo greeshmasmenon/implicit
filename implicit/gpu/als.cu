@@ -15,6 +15,12 @@ namespace gpu {
 
 using std::invalid_argument;
 
+namespace {
+// We apparently need different stopping criteria for half precision
+template <typename T> inline constexpr float SMALL = 1e-20;
+template <> inline constexpr float SMALL<half> = 1e-10;
+} // namespace
+
 template <typename T>
 __global__ void
 least_squares_cg_kernel(int factors, int user_count, int item_count, T *X,
@@ -62,7 +68,7 @@ least_squares_cg_kernel(int factors, int user_count, int item_count, T *X,
     __syncthreads();
 
     float rsold = dot(r, r, shared);
-    if (rsold < 1e-20)
+    if (rsold < SMALL<T>)
       continue;
 
     for (int it = 0; it < cg_steps; ++it) {
@@ -86,7 +92,7 @@ least_squares_cg_kernel(int factors, int user_count, int item_count, T *X,
       r -= alpha * Ap;
       __syncthreads();
       float rsnew = dot(r, r, shared);
-      if (rsnew < 1e-20)
+      if (rsnew < SMALL<T>)
         break;
 
       P[threadIdx.x] = p = r + (rsnew / rsold) * p;
@@ -107,9 +113,8 @@ least_squares_cg_kernel(int factors, int user_count, int item_count, T *X,
 }
 
 template <typename T>
-__global__ void l2_regularize_kernel(int factors, float regularization,
-                                     T *YtY) {
-  YtY[threadIdx.x * factors + threadIdx.x] += convert<float, T>(regularization);
+__global__ void l2_regularize_kernel(int factors, T regularization, T *YtY) {
+  YtY[threadIdx.x * factors + threadIdx.x] += regularization;
 }
 
 LeastSquaresSolver::LeastSquaresSolver() {
